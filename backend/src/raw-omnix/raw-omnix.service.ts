@@ -4,6 +4,22 @@ import { PrismaService } from '../../prisma/prisma.service';
 import * as xlsx from 'xlsx';
 import * as fs from 'fs/promises';
 
+const VALID_MAIN_CATEGORIES = new Set([
+  'BYU',
+  'INDIHOME',
+  'TELKOMSEL',
+  'DIGIPOS',
+]);
+
+/** Extra DB columns that are computed, not from the Excel file.
+ *  Key = DB column name, Value = Prisma field name */
+const COMPUTED_COLUMNS: Record<string, string> = {
+  segment: 'segment',
+  tambahan: 'tambahan',
+  case_in: 'caseIn',
+  case_handle: 'caseHandle',
+};
+
 const COLUMN_MAP: Record<string, keyof Prisma.RawOmnixUncheckedCreateInput> = {
   ticket_id: 'ticketId',
   remark: 'remark',
@@ -134,8 +150,24 @@ export class RawOmnixService {
       throw new BadRequestException('Excel file has no data rows');
     }
 
+    // Preload lookup table into a Map keyed by accountSourceName
+    const lookups = await this.prisma.lookupSegment.findMany();
+    const lookupMap = new Map<
+      string,
+      { segment: string | null; tambahan: string | null }
+    >();
+    for (const l of lookups) {
+      if (l.accountSourceName) {
+        lookupMap.set(l.accountSourceName, {
+          segment: l.segment,
+          tambahan: l.tambahan,
+        });
+      }
+    }
+    this.logger.log(`Loaded ${lookupMap.size} lookup segment entries`);
+
     const mapped = rows
-      .map((row) => this.mapRow(row))
+      .map((row) => this.mapRow(row, lookupMap))
       .filter((row): row is Prisma.RawOmnixUncheckedCreateInput => !!row);
 
     if (mapped.length === 0) {
@@ -174,21 +206,57 @@ export class RawOmnixService {
     }
   }
 
-  private mapRow(row: Record<string, unknown>) {
-    const data: Partial<Prisma.RawOmnixUncheckedCreateInput> = {};
+  private mapRow(
+    row: Record<string, unknown>,
+    lookupMap: Map<string, { segment: string | null; tambahan: string | null }>,
+  ) {
+    const data: Record<string, unknown> = {};
 
     for (const [column, field] of Object.entries(COLUMN_MAP)) {
       const rawValue = row[column];
       const value = this.normalizeValue(rawValue);
-      if (DATE_FIELDS.has(field)) {
-        data[field] = this.parseDate(value) as any;
+      if (DATE_FIELDS.has(field as any)) {
+        data[field] = this.parseDate(value);
       } else {
-        data[field] = value as any;
+        data[field] = value;
       }
     }
 
     if (!data.ticketId) return null;
-    return data as Prisma.RawOmnixUncheckedCreateInput;
+
+    // --- Computed: segment & tambahan via LookupSegment ---
+    const account = this.normalizeKey((data.accountName as string) ?? '');
+    const sourceName = (data.sourceName as string) ?? '';
+    const accountSourceKey = `${account}_${sourceName}`;
+    const lookup = lookupMap.get(accountSourceKey);
+    data.segment = lookup?.segment ?? null;
+    data.tambahan = lookup?.tambahan ?? null;
+
+    // --- Computed: caseIn ---
+    // 1 if session_id is present and non-empty, else 0
+    const sessionId = data.sessionId as string | null;
+    data.caseIn = sessionId && sessionId.trim() !== '' ? 1 : 0;
+
+    // --- Computed: caseHandle ---
+    // 0 if ticket_id is null/empty; otherwise 1 only if mainCategory is one of the valid set
+    const ticketId = data.ticketId as string;
+    if (!ticketId || ticketId.trim() === '') {
+      data.caseHandle = 0;
+    } else {
+      const mainCat = ((data.mainCategory as string) ?? '')
+        .toUpperCase()
+        .trim();
+      data.caseHandle = VALID_MAIN_CATEGORIES.has(mainCat) ? 1 : 0;
+    }
+
+    return data as unknown as Prisma.RawOmnixUncheckedCreateInput;
+  }
+
+  private normalizeKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
   }
 
   private normalizeValue(value: unknown) {
@@ -227,14 +295,18 @@ export class RawOmnixService {
   }
 
   private async upsertBatchRaw(batch: Prisma.RawOmnixUncheckedCreateInput[]) {
-    const columns = Object.keys(COLUMN_MAP);
+    const allColumns = {
+      ...COLUMN_MAP,
+      ...COMPUTED_COLUMNS,
+    };
+    const columns = Object.keys(allColumns);
     const columnSql = columns.map((column) => `"${column}"`).join(', ');
 
     const values: unknown[] = [];
     const rowsSql = batch
       .map((row, rowIndex) => {
         const placeholders = columns.map((column, columnIndex) => {
-          const field = COLUMN_MAP[column];
+          const field = allColumns[column];
           values.push((row as any)[field] ?? null);
           const paramIndex = rowIndex * columns.length + columnIndex + 1;
           return `$${paramIndex}`;

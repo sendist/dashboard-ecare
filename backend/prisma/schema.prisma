@@ -109,7 +109,27 @@ model RawOmnix {
   customerMsisdn               String?   @map("customer_msisdn")
   customerIndihomeNumber       String?   @map("customer_indihome_number")
 
+  segment                      String?
+  tambahan                     String?
+  caseIn                       Int?      @map("case_in")
+  caseHandle                   Int?      @map("case_handle")
+
+
   @@map("raw_omnix")
+}
+
+model LookupSegment {
+  id Int @id @default(autoincrement())
+  account String?
+  sourceName String? @map("source_name")
+  accountSourceName String? @map("account_source_name")
+  segment String?
+  tambahan String? 
+
+  @@map("lookup_segment")
+  @@index([accountSourceName])
+  @@index([segment])
+  @@index([tambahan])
 }
 
 enum UserRole {
