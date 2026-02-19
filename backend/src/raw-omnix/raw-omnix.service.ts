@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import * as xlsx from 'xlsx';
+import * as fs from 'fs/promises';
 
 const COLUMN_MAP: Record<string, keyof Prisma.RawOmnixUncheckedCreateInput> = {
   ticket_id: 'ticketId',
@@ -141,24 +142,36 @@ export class RawOmnixService {
       throw new BadRequestException('No valid rows found (missing ticket_id)');
     }
 
-    const columnsCount = Object.keys(COLUMN_MAP).length;
+    // const columnsCount = Object.keys(COLUMN_MAP).length;
     // const maxParams = 60000;
     // const batchSize = Math.max(1, Math.floor(maxParams / columnsCount));
     const batchSize = 500;
     for (let i = 0; i < mapped.length; i += batchSize) {
-      this.logger.log(`Upserting batch ${i / batchSize + 1} (rows ${i} to ${
-        Math.min(i + batchSize - 1, mapped.length - 1)
-      })`);
+      this.logger.log(
+        `Upserting batch ${i / batchSize + 1} (rows ${i} to ${Math.min(
+          i + batchSize - 1,
+          mapped.length - 1,
+        )})`,
+      );
       const batch = mapped.slice(i, i + batchSize);
       await this.upsertBatchRaw(batch);
     }
-    
+
     this.logger.log('Raw Omnix upsert from Excel file completed');
     return {
       processed: rows.length,
       upserted: mapped.length,
       skipped: rows.length - mapped.length,
     };
+  }
+
+  async upsertFromExcelFile(filePath: string) {
+    const fileBuffer = await fs.readFile(filePath);
+    try {
+      return await this.upsertFromExcel(fileBuffer);
+    } finally {
+      await fs.unlink(filePath).catch(() => undefined);
+    }
   }
 
   private mapRow(row: Record<string, unknown>) {
