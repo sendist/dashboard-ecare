@@ -4,6 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { RawOmnixModule } from './raw-omnix/raw-omnix.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { RawOmnixModule } from './raw-omnix/raw-omnix.module';
     }),
     AuthModule,
     RawOmnixModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
