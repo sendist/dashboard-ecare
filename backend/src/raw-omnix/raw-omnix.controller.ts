@@ -48,7 +48,7 @@ export class RawOmnixController {
         },
         filename: (_req, file, cb) => cb(null, safeFilename(file.originalname)),
       }),
-      limits: { fileSize: 100 * 1024 * 1024 },
+      limits: { fileSize: 200 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const ok =
           file.mimetype ===

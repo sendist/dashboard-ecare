@@ -116,6 +116,9 @@ model RawOmnix {
 
 
   @@map("raw_omnix")
+  @@index([dateStartInteraction])
+  @@index([tambahan])
+  @@index([segment])
 }
 
 model LookupSegment {

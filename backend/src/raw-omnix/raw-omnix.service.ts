@@ -198,13 +198,100 @@ export class RawOmnixService {
   }
 
   async upsertFromExcelFile(filePath: string) {
-    const fileBuffer = await fs.readFile(filePath);
-    try {
-      return await this.upsertFromExcel(fileBuffer);
-    } finally {
-      await fs.unlink(filePath).catch(() => undefined);
+    this.logger.log('Starting Raw Omnix upsert from file (streamed)');
+
+    // Preload lookup table
+    const lookups = await this.prisma.lookupSegment.findMany();
+    const lookupMap = new Map<
+      string,
+      { segment: string | null; tambahan: string | null }
+    >();
+    for (const l of lookups) {
+      if (l.accountSourceName) {
+        lookupMap.set(this.normalizeKey(l.accountSourceName), {
+          segment: l.segment,
+          tambahan: l.tambahan,
+        });
+      }
     }
+    this.logger.log(`Loaded ${lookupMap.size} lookup segment entries`);
+
+    // Read workbook from file (not buffer) to avoid doubling memory
+    const workbook = xlsx.readFile(filePath, { cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) throw new BadRequestException('No sheets found in file');
+
+    const sheet = workbook.Sheets[sheetName];
+    const ref = sheet['!ref'];
+    if (!ref) throw new BadRequestException('Excel sheet is empty');
+
+    const range = xlsx.utils.decode_range(ref);
+    const totalRows = range.e.r; // 0-indexed last row (row 0 = header)
+
+    if (totalRows < 1) {
+      throw new BadRequestException('Excel file has no data rows');
+    }
+
+    // Extract headers from row 0
+    const headers: string[] = [];
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      const cellRef = xlsx.utils.encode_cell({ r: 0, c: col });
+      const cell = sheet[cellRef];
+      headers[col] = cell ? String(cell.v) : '';
+    }
+
+    const CHUNK_SIZE = 500;
+    let processed = 0;
+    let upserted = 0;
+    let skipped = 0;
+    let batchNum = 0;
+
+    for (let startRow = 1; startRow <= totalRows; startRow += CHUNK_SIZE) {
+      const endRow = Math.min(startRow + CHUNK_SIZE - 1, totalRows);
+      batchNum++;
+
+      // Parse only this chunk of rows from the sheet
+      const chunkRows: Record<string, unknown>[] = [];
+      for (let r = startRow; r <= endRow; r++) {
+        const row: Record<string, unknown> = {};
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const header = headers[c];
+          if (!header) continue;
+          const cellRef = xlsx.utils.encode_cell({ r, c });
+          const cell = sheet[cellRef];
+          row[header] = cell ? cell.v : null;
+        }
+        chunkRows.push(row);
+      }
+
+      const mapped = chunkRows
+        .map((row) => this.mapRow(row, lookupMap))
+        .filter((row): row is Prisma.RawOmnixUncheckedCreateInput => !!row);
+
+      processed += chunkRows.length;
+      skipped += chunkRows.length - mapped.length;
+
+      if (mapped.length > 0) {
+        this.logger.log(
+          `Upserting batch ${batchNum} (rows ${startRow} to ${endRow}, ` +
+            `${mapped.length} valid)`,
+        );
+        await this.upsertBatchRaw(mapped);
+        upserted += mapped.length;
+      }
+    }
+
+    // Clean up temp file
+    await fs.unlink(filePath).catch(() => undefined);
+
+    this.logger.log('Raw Omnix upsert completed');
+    return { processed, upserted, skipped };
   }
+
+  /**
+   * @deprecated Use upsertFromExcelFile for large files (memory-safe).
+   * Kept for backward compatibility / small buffer uploads.
+   */
 
   private mapRow(
     row: Record<string, unknown>,
@@ -225,12 +312,18 @@ export class RawOmnixService {
     if (!data.ticketId) return null;
 
     // --- Computed: segment & tambahan via LookupSegment ---
-    const account = this.normalizeKey((data.accountName as string) ?? '');
+    const account = (data.account as string) ?? '';
     const sourceName = (data.sourceName as string) ?? '';
-    const accountSourceKey = `${account}_${sourceName}`;
+    const accountSourceKey = this.normalizeKey(`${account}_${sourceName}`);
     const lookup = lookupMap.get(accountSourceKey);
     data.segment = lookup?.segment ?? null;
     data.tambahan = lookup?.tambahan ?? null;
+    if (!data.segment || !data.tambahan) {
+      this.logger.warn(
+        `No lookup match for account "${account}" and sourceName "${sourceName}" ` +
+          `(key: "${accountSourceKey}")`,
+      );
+    }
 
     // --- Computed: caseIn ---
     // 1 if session_id is present and non-empty, else 0
@@ -253,10 +346,7 @@ export class RawOmnixService {
   }
 
   private normalizeKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '_');
+    return value.trim().toLowerCase().replace(/\s+/g, '_');
   }
 
   private normalizeValue(value: unknown) {
