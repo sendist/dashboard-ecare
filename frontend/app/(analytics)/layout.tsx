@@ -1,21 +1,49 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppSidebar } from "@/layout/sidebar";
+import { AuthUser, getCurrentUser } from "@/lib/auth";
 
 export default function AnalyticsLayout({
     children,
 } : {
     children: React.ReactNode;
 }) {
+    const router = useRouter();
+    const [user, setUser] = useState<AuthUser | null>(null);
+    const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+    useEffect(() => {
+      getCurrentUser()
+        .then((me) => {
+          setUser(me);
+        })
+        .catch(() => {
+          router.replace("/login");
+        })
+        .finally(() => {
+          setIsCheckingAuth(false);
+        });
+    }, [router]);
+
+    if (isCheckingAuth || !user) {
+      return (
+        <div className="flex min-h-screen items-center justify-center text-muted-foreground">
+          Checking session...
+        </div>
+      );
+    }
+
     return (
         <TooltipProvider>
         <div className="flex flex-row">
    <SidebarProvider>
-      <AppSidebar />
+      <AppSidebar user={user} />
       <SidebarInset>
         <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
           <div className="flex items-center gap-2 px-4">
@@ -47,9 +75,9 @@ export default function AnalyticsLayout({
           </div>
           <div className="min-h-[100vh] flex-1 rounded-xl bg-muted/50 md:min-h-min" />
         </div> */}
-        <body>
+        <main>
             {children}
-        </body>
+        </main>
       </SidebarInset>
     </SidebarProvider>
         </div>

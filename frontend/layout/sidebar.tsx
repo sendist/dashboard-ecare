@@ -25,6 +25,7 @@ import {
   SidebarHeader,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { AuthUser } from "@/lib/auth"
 
 // This is sample data.
 const data = {
@@ -156,7 +157,11 @@ const data = {
   ],
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+type AppSidebarProps = React.ComponentProps<typeof Sidebar> & {
+  user: AuthUser
+}
+
+export function AppSidebar({ user, ...props }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -167,7 +172,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavProjects projects={data.projects} />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser
+          user={{
+            name: user.name,
+            email: user.email,
+            avatar: "/avatars/shadcn.jpg",
+          }}
+        />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

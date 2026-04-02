@@ -1,5 +1,7 @@
 "use client"
 
+import { useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   BadgeCheck,
   Bell,
@@ -29,6 +31,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { logout } from "@/lib/auth"
 
 export function NavUser({
   user,
@@ -39,7 +42,24 @@ export function NavUser({
     avatar: string
   }
 }) {
+  const router = useRouter()
   const { isMobile } = useSidebar()
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
+
+  const handleLogout = async () => {
+    if (isLoggingOut) {
+      return
+    }
+
+    setIsLoggingOut(true)
+    try {
+      await logout()
+      router.replace("/login")
+      router.refresh()
+    } finally {
+      setIsLoggingOut(false)
+    }
+  }
 
   return (
     <SidebarMenu>
@@ -102,9 +122,9 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={handleLogout} disabled={isLoggingOut}>
               <LogOut />
-              Log out
+              {isLoggingOut ? "Logging out..." : "Log out"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
